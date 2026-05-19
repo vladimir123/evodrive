@@ -1,39 +1,72 @@
 // Supabase Edge Function — Evodrive shift auto-booking
-// Запускается каждый день в 00:00 по Риге
-// Отвечает 200 сразу, бронирование происходит в фоне
+// Поддержка нескольких аккаунтов с индивидуальными расписаниями
 
-// ─── РАСПИСАНИЕ — настраивай здесь ───────────────────────────────────────────
+// ─── АККАУНТЫ — настраивай здесь ─────────────────────────────────────────────
 //
-//  station_id     — ID станции
-//  start_time     — время начала в формате "HH:MM" (24ч)
-//  duration_hours — длительность смены в часах
-//  skip: true     — этот день недели не бронируем
+// Каждый аккаунт имеет:
+//   name     — для логов, чтобы понимать кто бронирует
+//   email    — либо напрямую, либо через Supabase Secret
+//   password — либо напрямую, либо через Supabase Secret
+//   schedule — расписание по дням недели (своё для каждого аккаунта)
 //
-// ─── РАСПИСАНИЕ ───────────────────────────────────────────────────────────────
-const SCHEDULE: Record<string, {
+// Secrets в Supabase: Dashboard → Edge Functions → Secrets
+//   supabase secrets set ACCOUNT_1_EMAIL="user1@email.com"
+//   supabase secrets set ACCOUNT_1_PASSWORD="pass1"
+//   supabase secrets set ACCOUNT_2_EMAIL="user2@email.com"
+//   supabase secrets set ACCOUNT_2_PASSWORD="pass2"
+
+type DaySchedule = {
   station_id: number;
   start_time: string;
   duration_hours: number;
   skip: boolean;
-}> = {
-  monday:    { station_id: 23, start_time: "19:00", duration_hours: 5, skip: false },
-  tuesday:   { station_id: 23, start_time: "19:00", duration_hours: 5, skip: false },
-  wednesday: { station_id: 23, start_time: "19:00", duration_hours: 5, skip: false },
-  thursday:  { station_id: 23, start_time: "19:00", duration_hours: 5, skip: false },
-  friday:    { station_id: 23, start_time: "19:00", duration_hours: 5, skip: false },
-  saturday:  { station_id: 23, start_time: "14:00", duration_hours: 10, skip: false },
-  sunday:    { station_id: 23, start_time: "14:00", duration_hours: 10, skip: false },
 };
+
+type Account = {
+  name: string;
+  email: string;
+  password: string;
+  schedule: Record<string, DaySchedule>;
+};
+
+const ACCOUNTS: Account[] = [
+  {
+    name:     "Аккаунт 1",
+    email:    Deno.env.get("ACCOUNT_1_EMAIL")    ?? "",
+    password: Deno.env.get("ACCOUNT_1_PASSWORD") ?? "",
+    schedule: {
+      monday:    { station_id: 23, start_time: "19:00", duration_hours: 5, skip: true },
+      tuesday:   { station_id: 23, start_time: "19:00", duration_hours: 5, skip: false },
+      wednesday: { station_id: 23, start_time: "19:00", duration_hours: 5, skip: false },
+      thursday:  { station_id: 23, start_time: "19:00", duration_hours: 5, skip: false },
+      friday:    { station_id: 23, start_time: "19:00", duration_hours: 5, skip: false },
+      saturday:  { station_id: 23, start_time: "14:00", duration_hours: 10, skip: false },
+      sunday:    { station_id: 23, start_time: "14:00", duration_hours: 10, skip: false },
+    },
+  },
+  // {
+  //   name:     "Аккаунт 2",
+  //   email:    Deno.env.get("ACCOUNT_2_EMAIL")    ?? "",
+  //   password: Deno.env.get("ACCOUNT_2_PASSWORD") ?? "",
+  //   schedule: {
+  //     monday:    { station_id: 8, start_time: "08:00", duration_hours: 8, skip: false },
+  //     tuesday:   { station_id: 8, start_time: "08:00", duration_hours: 8, skip: false },
+  //     wednesday: { station_id: 8, start_time: "08:00", duration_hours: 8, skip: false },
+  //     thursday:  { station_id: 8, start_time: "08:00", duration_hours: 8, skip: false },
+  //     friday:    { station_id: 8, start_time: "08:00", duration_hours: 8, skip: false },
+  //     saturday:  { station_id: 8, start_time: "08:00", duration_hours: 8, skip: true  },
+  //     sunday:    { station_id: 8, start_time: "08:00", duration_hours: 8, skip: true  },
+  //   },
+  // },
+  // Добавь больше аккаунтов по той же схеме...
+];
 // ─────────────────────────────────────────────────────────────────────────────
 
-const BASE_URL = "https://evodrive.lv/ru/driverportal";
-const EMAIL    = Deno.env.get("EVODRIVE_EMAIL")    ?? "";
-const PASSWORD = Deno.env.get("EVODRIVE_PASSWORD") ?? "";
-
+const BASE_URL  = "https://evodrive.lv/ru/driverportal";
 const DAY_NAMES = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
 
-function log(msg: string) {
-  console.log(`[${new Date().toISOString()}] ${msg}`);
+function log(prefix: string, msg: string) {
+  console.log(`[${new Date().toISOString()}] [${prefix}] ${msg}`);
 }
 
 function extractCsrf(html: string): string {
@@ -57,18 +90,13 @@ function getSetCookies(headers: Headers): string[] {
   return raw ? [raw] : [];
 }
 
-/**
- * Объединяет куки — новые перезаписывают старые с тем же именем.
- * Возвращает Map<name, "name=value"> и строку для заголовка Cookie.
- */
 function mergeCookies(existing: Map<string, string>, incoming: string[]): Map<string, string> {
   const result = new Map(existing);
   for (const raw of incoming) {
-    const pair = raw.split(";")[0].trim(); // "name=value"
+    const pair  = raw.split(";")[0].trim();
     const eqIdx = pair.indexOf("=");
     if (eqIdx === -1) continue;
-    const name = pair.slice(0, eqIdx);
-    result.set(name, pair);
+    result.set(pair.slice(0, eqIdx), pair);
   }
   return result;
 }
@@ -93,21 +121,20 @@ function getBookingTarget(): { date: string; dayName: string } {
   return { date: formatDate(target), dayName: DAY_NAMES[target.getDay()] };
 }
 
-async function login(): Promise<{ cookie: string; xsrfToken: string; csrfToken: string }> {
-  let jar = new Map<string, string>();
+async function loginAccount(
+  account: Account
+): Promise<{ cookie: string; xsrfToken: string; csrfToken: string }> {
+  const tag = account.name;
+  let jar   = new Map<string, string>();
 
-  // Шаг 1: GET страница логина
-  log("Шаг 1: Страница логина...");
+  log(tag, "Шаг 1: Страница логина...");
   const loginPageResp = await fetch(BASE_URL, { redirect: "follow" });
   jar = mergeCookies(jar, getSetCookies(loginPageResp.headers));
-  const loginHtml = await loginPageResp.text();
-  const csrfLogin = extractCsrf(loginHtml);
-  log(`  CSRF: ${csrfLogin.slice(0, 15)}... | Куки: [${Array.from(jar.keys()).join(", ")}]`);
+  const csrfLogin = extractCsrf(await loginPageResp.text());
 
-  // Шаг 2: POST логин — redirect:manual чтобы поймать куки из 302
-  log("Шаг 2: Логин...");
+  log(tag, "Шаг 2: Логин...");
   const loginResp = await fetch(BASE_URL, {
-    method: "POST",
+    method:   "POST",
     redirect: "manual",
     headers: {
       "Content-Type": "application/x-www-form-urlencoded",
@@ -116,22 +143,23 @@ async function login(): Promise<{ cookie: string; xsrfToken: string; csrfToken: 
       "User-Agent":   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
       "Accept":       "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     },
-    body: new URLSearchParams({ email: EMAIL, password: PASSWORD, _token: csrfLogin }),
+    body: new URLSearchParams({
+      email:    account.email,
+      password: account.password,
+      _token:   csrfLogin,
+    }),
   });
 
   jar = mergeCookies(jar, getSetCookies(loginResp.headers));
-  log(`  Статус: ${loginResp.status} | Куки: [${Array.from(jar.keys()).join(", ")}]`);
+  log(tag, `  Статус: ${loginResp.status} | Куки: [${Array.from(jar.keys()).join(", ")}]`);
 
   if (!jar.has("evodrive-session")) {
-    throw new Error(`evodrive-session не найден после логина. Куки: [${Array.from(jar.keys()).join(", ")}]`);
+    throw new Error(`evodrive-session не найден. Куки: [${Array.from(jar.keys()).join(", ")}]`);
   }
 
-  // Получаем XSRF-TOKEN значение (без имени) для заголовка X-XSRF-TOKEN
-  const xsrfRaw = jar.get("XSRF-TOKEN") ?? "";
-  const xsrfValue = decodeURIComponent(xsrfRaw.replace("XSRF-TOKEN=", ""));
+  const xsrfValue = decodeURIComponent((jar.get("XSRF-TOKEN") ?? "").replace("XSRF-TOKEN=", ""));
 
-  // Шаг 3: GET /shifts — получаем свежий CSRF-токен
-  log("Шаг 3: Страница смен...");
+  log(tag, "Шаг 3: Страница смен...");
   const shiftsResp = await fetch(`${BASE_URL}/shifts`, {
     redirect: "follow",
     headers: {
@@ -142,84 +170,85 @@ async function login(): Promise<{ cookie: string; xsrfToken: string; csrfToken: 
     },
   });
   jar = mergeCookies(jar, getSetCookies(shiftsResp.headers));
-  log(`  Статус: ${shiftsResp.status} | URL финальный: ${shiftsResp.url}`);
+  log(tag, `  Статус: ${shiftsResp.status} | URL: ${shiftsResp.url}`);
 
   const shiftsHtml = await shiftsResp.text();
-
-  // Проверяем что мы действительно на странице смен, а не на странице логина
-  if (shiftsResp.url.includes("login") || !shiftsHtml.includes("shift")) {
-    log(`  ⚠️  Похоже что нас редиректнуло на логин. Первые 200 символов: ${shiftsHtml.slice(0, 200)}`);
-    throw new Error("Сессия не создана — сервер вернул страницу логина вместо /shifts");
+  if (shiftsResp.url.includes("login")) {
+    throw new Error("Сессия не создана — сервер вернул страницу логина");
   }
 
   const freshToken = extractCsrf(shiftsHtml);
-  log(`  CSRF токен: ${freshToken.slice(0, 15)}... | Куки: [${Array.from(jar.keys()).join(", ")}]`);
-
   return { cookie: cookieString(jar), xsrfToken: xsrfValue, csrfToken: freshToken };
 }
 
-async function runBooking(): Promise<void> {
-  log("=".repeat(50));
-  log("Evodrive booking запущен");
+async function bookForAccount(account: Account, date: string, dayName: string): Promise<void> {
+  const tag    = account.name;
+  const config = account.schedule[dayName];
 
-  try {
-    const { date, dayName } = getBookingTarget();
-    const config = SCHEDULE[dayName];
-    log(`Цель: ${date} (${dayName})`);
-
-    if (config.skip) {
-      log("⏭️  Пропускаем (skip=true)");
-      return;
-    }
-
-    const { cookie, xsrfToken, csrfToken } = await login();
-
-    const payload = {
-      station_id:     config.station_id,
-      date,
-      start_time:     config.start_time,
-      duration_hours: config.duration_hours,
-      _token:         csrfToken,
-    };
-
-    const apiHeaders = {
-      "Content-Type":     "application/json",
-      "Accept":           "application/json",
-      "X-Requested-With": "XMLHttpRequest",
-      "Cookie":           cookie,
-      "Referer":          `${BASE_URL}/shifts`,
-      "User-Agent":       "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-      "X-XSRF-TOKEN":     xsrfToken, // Laravel иногда проверяет этот заголовок
-    };
-
-    log(`Проверяем доступность: station=${config.station_id}, time=${config.start_time}`);
-    const availResp = await fetch(`${BASE_URL}/shifts/check-availability`, {
-      method: "POST",
-      headers: apiHeaders,
-      body: JSON.stringify(payload),
-    });
-
-    const availText = await availResp.text();
-    log(`Доступность (${availResp.status}): ${availText}`);
-
-    const availability = JSON.parse(availText);
-
-    if (availability.available) {
-      const confirmResp = await fetch(`${BASE_URL}/shifts/confirm`, {
-        method: "POST",
-        headers: apiHeaders,
-        body: JSON.stringify(payload),
-      });
-      const confirmText = await confirmResp.text();
-      log(`✅ Забронировано! Статус: ${confirmResp.status} | Ответ: ${confirmText}`);
-    } else {
-      log("❌ Слот недоступен");
-    }
-  } catch (err) {
-    log(`❌ Ошибка: ${err instanceof Error ? err.message : String(err)}`);
+  if (config.skip) {
+    log(tag, `⏭️  ${date} (${dayName}) — пропускаем`);
+    return;
   }
 
-  log("=".repeat(50));
+  log(tag, `Бронируем ${date} (${dayName}) | station=${config.station_id} time=${config.start_time}`);
+
+  const { cookie, xsrfToken, csrfToken } = await loginAccount(account);
+
+  const payload = {
+    station_id:     config.station_id,
+    date,
+    start_time:     config.start_time,
+    duration_hours: config.duration_hours,
+    _token:         csrfToken,
+  };
+
+  const headers = {
+    "Content-Type":     "application/json",
+    "Accept":           "application/json",
+    "X-Requested-With": "XMLHttpRequest",
+    "X-XSRF-TOKEN":     xsrfToken,
+    "Cookie":           cookie,
+    "Referer":          `${BASE_URL}/shifts`,
+    "User-Agent":       "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+  };
+
+  const availResp = await fetch(`${BASE_URL}/shifts/check-availability`, {
+    method: "POST", headers, body: JSON.stringify(payload),
+  });
+  const availText = await availResp.text();
+  log(tag, `Доступность (${availResp.status}): ${availText}`);
+
+  const availability = JSON.parse(availText);
+  if (!availability.available) {
+    log(tag, "❌ Слот недоступен");
+    return;
+  }
+
+  const confirmResp = await fetch(`${BASE_URL}/shifts/confirm`, {
+    method: "POST", headers, body: JSON.stringify(payload),
+  });
+  const confirmText = await confirmResp.text();
+  log(tag, `✅ Забронировано! Статус: ${confirmResp.status} | ${confirmText}`);
+}
+
+async function runBooking(): Promise<void> {
+  log("MAIN", "=".repeat(50));
+  log("MAIN", `Запуск для ${ACCOUNTS.length} аккаунтов`);
+
+  const { date, dayName } = getBookingTarget();
+  log("MAIN", `Цель: ${date} (${dayName})`);
+
+  for (const account of ACCOUNTS) {
+    try {
+      await bookForAccount(account, date, dayName);
+    } catch (err) {
+      log(account.name, `❌ Ошибка: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    // Пауза между аккаунтами чтобы не нагружать сервер
+    await new Promise((r) => setTimeout(r, 2000));
+  }
+
+  log("MAIN", "=".repeat(50));
 }
 
 Deno.serve((_req) => {
