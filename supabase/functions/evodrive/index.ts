@@ -89,7 +89,7 @@ function getBookingTarget(): { date: string; dayName: string } {
     new Date().toLocaleString("en-US", { timeZone: "Europe/Riga" })
   );
   const target = new Date(nowRiga);
-  target.setDate(nowRiga.getDate() + 14);
+  target.setDate(nowRiga.getDate() + 13);
   return { date: formatDate(target), dayName: DAY_NAMES[target.getDay()] };
 }
 
