@@ -31,33 +31,33 @@ type Account = {
 
 const ACCOUNTS: Account[] = [
   {
-    name:     "Аккаунт 1",
+    name:     `Аккаунт 1 ${Deno.env.get("ACCOUNT_1_EMAIL")}`,
     email:    Deno.env.get("ACCOUNT_1_EMAIL")    ?? "",
     password: Deno.env.get("ACCOUNT_1_PASSWORD") ?? "",
     schedule: {
-      monday:    { station_id: 23, start_time: "19:00", duration_hours: 5, skip: true },
-      tuesday:   { station_id: 23, start_time: "19:00", duration_hours: 5, skip: false },
-      wednesday: { station_id: 23, start_time: "19:00", duration_hours: 5, skip: false },
-      thursday:  { station_id: 23, start_time: "19:00", duration_hours: 5, skip: false },
-      friday:    { station_id: 23, start_time: "19:00", duration_hours: 5, skip: false },
+      monday:    { station_id: 23, start_time: "18:00", duration_hours: 6, skip: true },
+      tuesday:   { station_id: 23, start_time: "18:00", duration_hours: 6, skip: false },
+      wednesday: { station_id: 23, start_time: "18:00", duration_hours: 6, skip: false },
+      thursday:  { station_id: 23, start_time: "18:00", duration_hours: 6, skip: false },
+      friday:    { station_id: 23, start_time: "18:00", duration_hours: 6, skip: false },
       saturday:  { station_id: 23, start_time: "14:00", duration_hours: 10, skip: false },
       sunday:    { station_id: 23, start_time: "14:00", duration_hours: 10, skip: false },
     },
   },
-  // {
-  //   name:     "Аккаунт 2",
-  //   email:    Deno.env.get("ACCOUNT_2_EMAIL")    ?? "",
-  //   password: Deno.env.get("ACCOUNT_2_PASSWORD") ?? "",
-  //   schedule: {
-  //     monday:    { station_id: 8, start_time: "08:00", duration_hours: 8, skip: false },
-  //     tuesday:   { station_id: 8, start_time: "08:00", duration_hours: 8, skip: false },
-  //     wednesday: { station_id: 8, start_time: "08:00", duration_hours: 8, skip: false },
-  //     thursday:  { station_id: 8, start_time: "08:00", duration_hours: 8, skip: false },
-  //     friday:    { station_id: 8, start_time: "08:00", duration_hours: 8, skip: false },
-  //     saturday:  { station_id: 8, start_time: "08:00", duration_hours: 8, skip: true  },
-  //     sunday:    { station_id: 8, start_time: "08:00", duration_hours: 8, skip: true  },
-  //   },
-  // },
+  {
+    name:     `Аккаунт 2 ${Deno.env.get("ACCOUNT_2_EMAIL")}`,
+    email:    Deno.env.get("ACCOUNT_2_EMAIL")    ?? "",
+    password: Deno.env.get("ACCOUNT_2_PASSWORD") ?? "",
+    schedule: {
+      monday:    { station_id: 23, start_time: "01:00", duration_hours: 8, skip: false },
+      tuesday:   { station_id: 23, start_time: "01:00", duration_hours: 8, skip: false },
+      wednesday: { station_id: 23, start_time: "01:00", duration_hours: 8, skip: false },
+      thursday:  { station_id: 23, start_time: "01:00", duration_hours: 8, skip: false },
+      friday:    { station_id: 23, start_time: "01:00", duration_hours: 8, skip: false },
+      saturday:  { station_id: 23, start_time: "01:00", duration_hours: 8, skip: true  },
+      sunday:    { station_id: 23, start_time: "01:00", duration_hours: 8, skip: false  },
+    },
+  },
   // Добавь больше аккаунтов по той же схеме...
 ];
 // ─────────────────────────────────────────────────────────────────────────────
@@ -185,11 +185,6 @@ async function bookForAccount(account: Account, date: string, dayName: string): 
   const tag    = account.name;
   const config = account.schedule[dayName];
 
-  if (config.skip) {
-    log(tag, `⏭️  ${date} (${dayName}) — пропускаем`);
-    return;
-  }
-
   log(tag, `Бронируем ${date} (${dayName}) | station=${config.station_id} time=${config.start_time}`);
 
   const { cookie, xsrfToken, csrfToken } = await loginAccount(account);
@@ -238,14 +233,24 @@ async function runBooking(): Promise<void> {
   const { date, dayName } = getBookingTarget();
   log("MAIN", `Цель: ${date} (${dayName})`);
 
-  for (const account of ACCOUNTS) {
+  for (let i = 0; i < ACCOUNTS.length; i++) {
+    const account = ACCOUNTS[i];
+    const config  = account.schedule[dayName];
+
     try {
+      if (config.skip) {
+        log(account.name, `⏭️  ${date} (${dayName}) — пропускаем`);
+        continue; // пауза не нужна — сервер не трогали
+      }
       await bookForAccount(account, date, dayName);
     } catch (err) {
       log(account.name, `❌ Ошибка: ${err instanceof Error ? err.message : String(err)}`);
     }
-    // Пауза между аккаунтами чтобы не нагружать сервер
-    await new Promise((r) => setTimeout(r, 2000));
+
+    // Пауза только если не последний аккаунт и реально делали запросы
+    if (i < ACCOUNTS.length - 1) {
+      await new Promise((r) => setTimeout(r, 300));
+    }
   }
 
   log("MAIN", "=".repeat(50));
