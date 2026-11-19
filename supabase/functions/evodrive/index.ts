@@ -1,27 +1,26 @@
 // Supabase Edge Function — Evodrive shift auto-booking
-// Поддержка нескольких аккаунтов с индивидуальными расписаниями
+// Support for multiple accounts with individual schedules
 
-// ─── АККАУНТЫ — настраивай здесь ─────────────────────────────────────────────
+// ─── ACCOUNTS ─────────────────────────────────────────────
 //
-// Каждый аккаунт имеет:
-//   name     — для логов, чтобы понимать кто бронирует
-//   email    — либо напрямую, либо через Supabase Secret
-//   password — либо напрямую, либо через Supabase Secret
-//   schedule — расписание по дням недели (своё для каждого аккаунта)
+// For each account:
+//   name     — for logging
+//   email    — Supabase Secret or direct e-mail for logging into portal
+//   password — Supabase Secret or direct e-mail for logging into portal
+//   schedule — individual schedule (by day) for each account
 //
-// station_id в расписании дня можно задать как одно число (33) или как массив
-// приоритетов ([33, 34, 12]) — если слот на первой станции занят, функция
-// автоматически попробует следующую станцию из списка для этого аккаунта.
+// station_id can be single number (1) or array ([1, 2, 3])
+// if station not available than check another from list in array variant
 //
-// Secrets в Supabase: Dashboard → Edge Functions → Secrets
+// Secrets Supabase: Dashboard → Edge Functions → Secrets
 //   supabase secrets set ACCOUNT_1_EMAIL="user1@email.com"
 //   supabase secrets set ACCOUNT_1_PASSWORD="pass1"
 //   supabase secrets set ACCOUNT_2_EMAIL="user2@email.com"
 //   supabase secrets set ACCOUNT_2_PASSWORD="pass2"
 
 type DaySchedule = {
-  // Можно указать одну станцию (33) или список станций в порядке приоритета ([33, 34, 12]) —
-  // если слот на первой станции занят, функция автоматически попробует следующую.
+// station_id can be single number (1) or array ([1, 2, 3])
+// if station not available than check another from list in array variant
   station_id: number | number[];
   start_time: string;
   duration_hours: number;
@@ -40,6 +39,7 @@ type Account = {
 };
 
 const ACCOUNTS: Account[] = [
+  //account 1
   {
     name:     `Аккаунт 1 ${Deno.env.get("ACCOUNT_1_EMAIL")}`,
     email:    Deno.env.get("ACCOUNT_1_EMAIL")    ?? "",
@@ -54,7 +54,7 @@ const ACCOUNTS: Account[] = [
       sunday:    { station_id: 33, start_time: "14:00", duration_hours: 10, skip: false },
     },
   },
-  //seduced
+  //account 2
   {
     name:     `Аккаунт 4 ${Deno.env.get("ACCOUNT_4_EMAIL")}`,
     email:    Deno.env.get("ACCOUNT_4_EMAIL")    ?? "",
@@ -69,52 +69,7 @@ const ACCOUNTS: Account[] = [
       sunday:    { station_id: [11, 26, 35, 8], start_time: "17:00", duration_hours: 12, skip: false  },
     },
   },
-  //sandija
-  {
-    name:     `Аккаунт 2 ${Deno.env.get("ACCOUNT_2_EMAIL")}`,
-    email:    Deno.env.get("ACCOUNT_2_EMAIL")    ?? "",
-    password: Deno.env.get("ACCOUNT_2_PASSWORD") ?? "",
-    schedule: {
-      monday:    { station_id: 23, start_time: "22:00", duration_hours: 9, skip: false },
-      tuesday:   { station_id: 23, start_time: "22:00", duration_hours: 9, skip: false },
-      wednesday: { station_id: 23, start_time: "22:00", duration_hours: 9, skip: false },
-      thursday:  { station_id: 23, start_time: "22:00", duration_hours: 9, skip: false },
-      friday:    { station_id: 23, start_time: "22:00", duration_hours: 9, skip: false },
-      saturday:  { station_id: 23, start_time: "22:00", duration_hours: 9, skip: true  },
-      sunday:    { station_id: 23, start_time: "22:00", duration_hours: 9, skip: false  },
-    },
-  },
-  //gatis
-  // {
-  //   name:     `Аккаунт 3 ${Deno.env.get("ACCOUNT_3_EMAIL")}`,
-  //   email:    Deno.env.get("ACCOUNT_3_EMAIL")    ?? "",
-  //   password: Deno.env.get("ACCOUNT_3_PASSWORD") ?? "",
-  //   schedule: {
-  //     monday:    { station_id: 16, start_time: "09:00", duration_hours: 11, skip: false },
-  //     tuesday:   { station_id: 16, start_time: "08:00", duration_hours: 12, skip: false },
-  //     wednesday: { station_id: 16, start_time: "13:00", duration_hours: 14, skip: false },
-  //     thursday:  { station_id: 16, start_time: "09:00", duration_hours: 11, skip: false },
-  //     friday:    { station_id: 16, start_time: "13:00", duration_hours: 18, skip: false },
-  //     saturday:  { station_id: 16, start_time: "15:00", duration_hours: 16, skip: false  },
-  //     sunday:    { station_id: 16, start_time: "16:00", duration_hours: 20, skip: true  },
-  //   },
-  // },
-  //Liva
-  // {
-  //   name:     `Аккаунт 5 ${Deno.env.get("ACCOUNT_5_EMAIL")}`,
-  //   email:    Deno.env.get("ACCOUNT_5_EMAIL")    ?? "",
-  //   password: Deno.env.get("ACCOUNT_5_PASSWORD") ?? "",
-  //   schedule: {
-  //     monday:    { station_id: 22, start_time: "06:00", duration_hours: 6, skip: true },
-  //     tuesday:   { station_id: 22, start_time: "06:00", duration_hours: 6, skip: true },
-  //     wednesday: { station_id: 22, start_time: "06:00", duration_hours: 6, skip: true },
-  //     thursday:  { station_id: 22, start_time: "09:00", duration_hours: 7, skip: false },
-  //     friday:    { station_id: 22, start_time: "13:00", duration_hours: 17, skip: true },
-  //     saturday:  { station_id: 22, start_time: "14:00", duration_hours: 13, skip: true  },
-  //     sunday:    { station_id: 22, start_time: "20:00", duration_hours: 9, skip: false  },
-  //   },
-  // },
-  // Добавь больше аккаунтов по той же схеме...
+  //other accounts
 ];
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -309,7 +264,7 @@ async function runBooking(): Promise<void> {
       log(account.name, `❌ Ошибка: ${err instanceof Error ? err.message : String(err)}`);
     }
 
-    // Пауза только если не последний аккаунт и реально делали запросы
+    //timeout
     if (i < ACCOUNTS.length - 1) {
       await new Promise((r) => setTimeout(r, 300));
     }
